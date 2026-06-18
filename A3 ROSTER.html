@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A3 Merch — Artist Roster</title>
+
+<!--
+=============================================================
+  A3 MERCH INTERNAL REFERENCE HUB
+  Hosted on SharePoint — Internal Use Only
+
+  SETUP REQUIRED (one-time, ~5 minutes):
+  ---------------------------------------------------------------
+  1. Go to https://portal.azure.com → Azure Active Directory
+     → App registrations → New registration
+  2. Name: "A3 Merch Reference Hub"
+     Supported account types: "Accounts in this organizational directory only"
+     Redirect URI: Web → paste the full URL of this SharePoint page
+  3. After registering, copy the "Application (client) ID"
+  4. Under "API permissions" → Add → Microsoft Graph → Delegated
+     → Add: Files.Read, Sites.Read.All → Grant admin consent
+  5. Under "Authentication" → enable "Access tokens" and "ID tokens"
+     under Implicit grant
+  6. Paste your client ID below where it says YOUR_CLIENT_ID_HERE
+
+  EXCEL FILE:
+  The app reads live data from:
+  https://a3merch.sharepoint.com/sites/SALES/...ECOM+VEND ROSTER_MASTER.xlsx
+  (sourcedoc: 1883822A-C0C8-46A0-B9C5-051A11F996C3)
+=============================================================
+-->
+
+<script>
+  const CONFIG = {
+    clientId:   '3bbb5192-dd09-4b75-aed1-06cc891c1ace',
+    tenantId:   'a3merch.onmicrosoft.com',
+    sharingUrl: 'https://a3merch.sharepoint.com/:x:/r/sites/SALES/_layouts/15/Doc.aspx?sourcedoc=%7B1883822A-C0C8-46A0-B9C5-051A11F996C3%7D&file=ECOM%2BVEND%20ROSTER_MASTER.xlsx&action=default&mobileredirect=true',
+    rosterSheet: 'ROSTER + WHOLESALE',
+  };
+</script>
+
+<script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
+
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --a3-blue:    #0055b8;
+    --a3-red:     #e1251b;
+    --a3-blue-lt: #e6f1fb;
+    --a3-blue-dk: #003d85;
+    --bg:         #f5f6f8;
+    --surface:    #ffffff;
+    --border:     rgba(0,0,0,0.10);
+    --text:       #1a1a1a;
+    --text-2:     #5a5a6a;
+    --text-3:     #9090a0;
+    --radius:     8px;
+    --radius-lg:  12px;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+
+  /* ── Header ── */
+  .header {
+    background: var(--a3-blue);
+    padding: 0 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 56px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .header-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .header-logo {
+    width: 32px;
+    height: 32px;
+    background: #fff;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 13px;
+    color: var(--a3-blue);
+    letter-spacing: -.5px;
+    flex-shrink: 0;
+  }
+  .header-title {
+    color: #fff;
+    font-size: 15px;
+    font-weight: 500;
+  }
+  .header-sub {
+    color: rgba(255,255,255,0.6);
+    font-size: 12px;
+  }
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .badge-conf {
+    background: var(--a3-red);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 4px;
+  }
+  .user-info {
+    color: rgba(255,255,255,0.85);
+    font-size: 12px;
+    display: none;
+  }
+  .btn-sign {
+    background: rgba(255,255,255,0.15);
+    border: 0.5px solid rgba(255,255,255,0.4);
+    color: #fff;
+    font-size: 13px;
+    padding: 6px 14px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: background .15s;
+  }
+  .btn-sign:hover { background: rgba(255,255,255,0.25); }
+
+  /* ── Layout ── */
+  .main { max-width: 1100px; margin: 0 auto; padding: 1.5rem 1.5rem 3rem; }
+
+  /* ── Auth gate ── */
+  #auth-gate {
+    min-height: 60vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1.5rem;
+    text-align: center;
+  }
+  #auth-gate .gate-icon {
+    width: 64px; height: 64px;
+    background: var(--a3-blue-lt);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #auth-gate .gate-icon svg { width: 28px; height: 28px; color: var(--a3-blue); }
+  #auth-gate h2 { font-size: 20px; font-weight: 500; }
+  #auth-gate p { color: var(--text-2); max-width: 360px; font-size: 13px; }
+  .btn-primary {
+    background: var(--a3-blue);
+    color: #fff;
+    border: none;
+    font-size: 14px;
+    padding: 10px 24px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-weight: 500;
+    transition: background .15s;
+  }
+  .btn-primary:hover { background: var(--a3-blue-dk); }
+  .config-warn {
+    background: #fff8e1;
+    border: 1px solid #ffe082;
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    font-size: 12px;
+    color: #7a5800;
+    max-width: 420px;
+    text-align: left;
+    display: none;
+  }
+
+  /* ── App content ── */
+  #app-content { display: none; }
+
+  /* ── Stat row ── */
+  .stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 1.25rem; }
+  .stat-card {
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 14px 16px;
+    text-align: center;
+  }
+  .stat-n { font-size: 24px; font-weight: 500; color: var(--a3-blue); }
+  .stat-l { font-size: 11px; color: var(--text-2); margin-top: 2px; text-transform: uppercase; letter-spacing: .05em; }
+
+
+
+  /* ── Toolbar ── */
+  .toolbar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .toolbar input[type=search] {
+    flex: 2;
+    min-width: 180px;
+    padding: 8px 12px;
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 13px;
+    background: var(--surface);
+    color: var(--text);
+    outline: none;
+    transition: border .15s;
+  }
+  .toolbar input[type=search]:focus { border-color: var(--a3-blue); }
+  .toolbar select {
+    flex: 1;
+    min-width: 140px;
+    padding: 8px 10px;
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 13px;
+    background: var(--surface);
+    color: var(--text);
+    outline: none;
+    cursor: pointer;
+  }
+  .toolbar select:focus { border-color: var(--a3-blue); }
+
+  /* ── Table ── */
+  .table-wrap {
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+  }
+  .scroll-x { overflow-x: auto; max-height: 500px; overflow-y: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+  thead th {
+    background: #f0f4fa;
+    padding: 9px 12px;
+    text-align: left;
+    font-weight: 500;
+    font-size: 11px;
+    color: var(--text-2);
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    border-bottom: 0.5px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    white-space: nowrap;
+  }
+  td {
+    padding: 8px 12px;
+    border-bottom: 0.5px solid rgba(0,0,0,0.05);
+    vertical-align: middle;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #f8faff; }
+
+  .tfoot-row {
+    font-size: 12px;
+    color: var(--text-2);
+    padding: 8px 12px;
+    border-top: 0.5px solid var(--border);
+    background: var(--surface);
+  }
+
+  /* ── Badges ── */
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .b-yes  { background: #e6f1fb; color: #0c447c; }
+  .b-no   { background: #f1f1f3; color: #6a6a7a; }
+  .b-active { background: #eaf3de; color: #27500a; }
+  .b-closed { background: #fcebeb; color: #791f1f; }
+  .b-blank  { background: #f1f1f3; color: #9090a0; }
+
+
+
+  /* ── Loading ── */
+  #loading-indicator {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 2rem;
+    color: var(--text-2);
+    font-size: 13px;
+    justify-content: center;
+  }
+  .spinner {
+    width: 20px; height: 20px;
+    border: 2px solid var(--border);
+    border-top-color: var(--a3-blue);
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  #error-box {
+    display: none;
+    background: #fff0f0;
+    border: 0.5px solid #f5c1c1;
+    border-radius: var(--radius-lg);
+    padding: 1.25rem 1.5rem;
+    color: #7a1414;
+    font-size: 13px;
+    line-height: 1.7;
+    margin-bottom: 1rem;
+  }
+
+  /* ── Live data badge ── */
+  .live-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: #27500a;
+    background: #eaf3de;
+    padding: 3px 9px;
+    border-radius: 20px;
+    font-weight: 500;
+    margin-left: auto;
+  }
+  .live-dot {
+    width: 6px; height: 6px;
+    background: #639922;
+    border-radius: 50%;
+  }
+  .stale-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: var(--text-2);
+    background: #f1f1f3;
+    padding: 3px 9px;
+    border-radius: 20px;
+  }
+
+  /* ── Refresh btn ── */
+  .btn-refresh {
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    color: var(--text-2);
+    font-size: 12px;
+    padding: 6px 12px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: border-color .15s, color .15s;
+  }
+  .btn-refresh:hover { border-color: var(--a3-blue); color: var(--a3-blue); }
+  .btn-refresh svg { width: 13px; height: 13px; }
+
+  /* ── Open Excel link ── */
+  .open-excel {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--a3-blue);
+    text-decoration: none;
+    padding: 6px 12px;
+    border: 0.5px solid var(--a3-blue);
+    border-radius: var(--radius);
+    transition: background .15s;
+  }
+  .open-excel:hover { background: var(--a3-blue-lt); }
+  .open-excel svg { width: 13px; height: 13px; }
+
+  /* ── Footer ── */
+  .footer {
+    border-top: 3px solid var(--a3-red);
+    background: #1a1a2e;
+    color: rgba(255,255,255,0.5);
+    font-size: 11px;
+    padding: 12px 2rem;
+    text-align: center;
+    margin-top: 3rem;
+  }
+
+  /* ── Responsive ── */
+  @media (max-width: 700px) {
+    .stat-row { grid-template-columns: repeat(2, 1fr); }
+    .main { padding: 1rem; }
+    .header { padding: 0 1rem; }
+    .tab span { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── HEADER ── -->
+<header class="header">
+  <div class="header-brand">
+    <div class="header-logo">A3</div>
+    <div>
+      <div class="header-title">A3 Merch — Artist Roster</div>
+      <div class="header-sub">Ecom &amp; Vending Master Roster</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <span class="badge-conf">Confidential</span>
+    <span class="user-info" id="user-name"></span>
+    <button class="btn-sign" id="auth-btn" onclick="handleAuth()">Sign in</button>
+  </div>
+</header>
+
+<!-- ── MAIN ── -->
+<main class="main">
+
+  <!-- Auth gate -->
+  <div id="auth-gate">
+    <div class="gate-icon">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+      </svg>
+    </div>
+    <h2>Internal access only</h2>
+    <p>Sign in with your A3 Merch Microsoft account to view the roster.</p>
+    <button class="btn-primary" onclick="handleAuth()">Sign in with Microsoft</button>
+  </div>
+
+  <!-- App -->
+  <div id="app-content">
+
+    <!-- ── ROSTER ── -->
+    <div id="panel-roster">
+      <div id="loading-indicator">
+        <div class="spinner"></div>
+        Loading roster from SharePoint…
+      </div>
+      <div id="error-box"></div>
+
+      <div id="roster-loaded" style="display:none">
+        <div class="stat-row" id="stat-row"></div>
+
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:1rem; flex-wrap:wrap;">
+          <a class="open-excel" href="https://a3merch.sharepoint.com/:x:/r/sites/SALES/_layouts/15/Doc.aspx?sourcedoc=%7B1883822A-C0C8-46A0-B9C5-051A11F996C3%7D&file=ECOM%2BVEND%20ROSTER_MASTER.xlsx&action=default&mobileredirect=true" target="_blank" rel="noopener">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+            </svg>
+            Open in Excel
+          </a>
+          <button class="btn-refresh" onclick="loadRoster()" aria-label="Refresh roster data">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            Refresh
+          </button>
+          <span id="last-updated" class="stale-badge">—</span>
+        </div>
+
+        <div class="toolbar">
+          <input type="search" id="search-input" placeholder="Search artist or brand…" oninput="filterRoster()" aria-label="Search artists">
+          <select id="f-bm" onchange="filterRoster()" aria-label="Filter by brand manager">
+            <option value="">All brand managers</option>
+          </select>
+          <select id="f-disp" onchange="filterRoster()" aria-label="Filter by status">
+            <option value="">All statuses</option>
+            <option value="ACTIVE">Active</option>
+            <option value="CLOSED">Closed</option>
+            <option value="blank">No status</option>
+          </select>
+          <select id="f-own" onchange="filterRoster()" aria-label="Filter by owned/licensed">
+            <option value="">Owned / licensed</option>
+            <option value="YES">Owned</option>
+            <option value="NO">Not owned</option>
+          </select>
+          <select id="f-vend" onchange="filterRoster()" aria-label="Filter by vending">
+            <option value="">Vending client</option>
+            <option value="YES">Yes</option>
+            <option value="NO">No</option>
+          </select>
+        </div>
+
+        <div class="table-wrap">
+          <div class="scroll-x">
+            <table aria-label="Artist roster">
+              <thead>
+                <tr>
+                  <th style="width:20%">Artist / brand</th>
+                  <th style="width:14%">Brand manager</th>
+                  <th style="width:13%">Ecom store mgr</th>
+                  <th style="width:10%">A&R lead</th>
+                  <th style="width:9%">Sales coord.</th>
+                  <th style="width:8%">Status</th>
+                  <th style="width:7%">Owned</th>
+                  <th style="width:7%">Vending</th>
+                  <th style="width:12%">Tour rep</th>
+                </tr>
+              </thead>
+              <tbody id="roster-tbody"></tbody>
+            </table>
+          </div>
+          <div class="tfoot-row" id="roster-count"></div>
+        </div>
+      </div>
+    </div><!-- /roster -->
+
+  </div><!-- /app-content -->
+</main>
+
+<footer class="footer">
+  A3 Merch — Confidential &amp; Proprietary &nbsp;·&nbsp; Ecom &amp; Vending Master Roster &nbsp;·&nbsp; Internal Use Only
+</footer>
+
+<script>
+// ──────────────────────────────────────────────────────
+//  Auth
+// ──────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────
+//  Auth
+// ──────────────────────────────────────────────────────
+let msalInstance, rosterData = [];
+
+function initMsal() {
+  msalInstance = new msal.PublicClientApplication({
+    auth: {
+      clientId: CONFIG.clientId,
+      authority: `https://login.microsoftonline.com/${CONFIG.tenantId}`,
+      redirectUri: window.location.href.split('?')[0],
+    },
+    cache: { cacheLocation: 'sessionStorage' }
+  });
+}
+
+async function handleAuth() {
+  try {
+    const resp = await msalInstance.loginPopup({ scopes: ['Files.Read', 'Sites.Read.All'] });
+    onSignedIn(resp.account);
+  } catch(e) {
+    if (e.errorCode !== 'user_cancelled') showError('Sign-in failed: ' + e.message);
+  }
+}
+
+function onSignedIn(account) {
+  const name = account.name || account.username;
+  document.getElementById('user-name').textContent = name;
+  document.getElementById('user-name').style.display = 'block';
+  document.getElementById('auth-btn').textContent = 'Sign out';
+  document.getElementById('auth-btn').onclick = handleSignOut;
+  document.getElementById('auth-gate').style.display = 'none';
+  document.getElementById('app-content').style.display = 'block';
+  loadRoster();
+}
+
+function handleSignOut() {
+  msalInstance.logoutPopup();
+  location.reload();
+}
+
+async function getToken() {
+  const accounts = msalInstance.getAllAccounts();
+  if (!accounts.length) throw new Error('No signed-in account');
+  const req = { scopes: ['Files.Read', 'Sites.Read.All'], account: accounts[0] };
+  try {
+    const r = await msalInstance.acquireTokenSilent(req);
+    return r.accessToken;
+  } catch {
+    const r = await msalInstance.acquireTokenPopup(req);
+    return r.accessToken;
+  }
+}
+
+// ──────────────────────────────────────────────────────
+//  Graph — load Excel workbook
+// ──────────────────────────────────────────────────────
+async function loadRoster() {
+  const loading = document.getElementById('loading-indicator');
+  const loaded  = document.getElementById('roster-loaded');
+  const errBox  = document.getElementById('error-box');
+
+  loading.style.display = 'flex';
+  loaded.style.display  = 'none';
+  errBox.style.display  = 'none';
+
+  try {
+    const token = await getToken();
+
+    // Step 1: resolve the sharing URL → driveId + itemId
+    const encodedUrl = btoa(CONFIG.sharingUrl).replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_');
+    const shareRes = await fetch(
+      `https://graph.microsoft.com/v1.0/shares/u!${encodedUrl}/driveItem`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!shareRes.ok) throw new Error(`Could not resolve file: ${shareRes.status} ${shareRes.statusText}`);
+    const shareData = await shareRes.json();
+    const driveId = shareData.parentReference.driveId;
+    const itemId  = shareData.id;
+
+    // Step 2: read the "ROSTER + WHOLESALE" sheet used range
+    const sheetName = encodeURIComponent(CONFIG.rosterSheet);
+    const rangeRes = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${itemId}/workbook/worksheets('${sheetName}')/usedRange?$select=values`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!rangeRes.ok) throw new Error(`Could not read worksheet: ${rangeRes.status} ${rangeRes.statusText}`);
+    const rangeData = await rangeRes.json();
+    const rows = rangeData.values;
+
+    processRosterData(rows);
+
+    document.getElementById('last-updated').innerHTML =
+      `<span class="live-dot"></span> Live · ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`;
+    document.getElementById('last-updated').className = 'live-badge';
+
+  } catch(e) {
+    showError(`Failed to load roster data from SharePoint.<br><strong>Details:</strong> ${e.message}<br><br>
+      <a href="${CONFIG.sharingUrl}" target="_blank" rel="noopener" style="color:var(--a3-blue)">Open the Excel file directly on SharePoint</a>.`);
+  } finally {
+    loading.style.display = 'none';
+    loaded.style.display  = 'block';
+  }
+}
+
+function processRosterData(rows) {
+  if (!rows || rows.length < 2) {
+    showError('The worksheet appears to be empty or the format has changed.');
+    return;
+  }
+
+  // Header row is row 0; find the column indices dynamically
+  const headers = rows[0].map(h => String(h).trim().toLowerCase());
+  const col = name => headers.findIndex(h => h.includes(name));
+
+  const iArtist = col('artist');
+  const iBM     = col('brand manager');
+  const iEcomMgr= col('ecom store manager');
+  const iAR     = col('a&r');
+  const iSales  = col('sales');
+  const iDisp   = col('ecom disposition');
+  const iOwned  = col('owned');
+  const iVend   = col('vending');
+  const iTour   = col('tour rep');
+
+  // Only take rows that look like artists (stop at blank artist name or "WHOLESALE ONLY")
+  rosterData = [];
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    const artist = String(r[iArtist] || '').trim();
+    if (!artist || artist.toUpperCase().startsWith('WHOLESALE ONLY') || artist.startsWith('*') || artist === 'ARTIST/BRAND') break;
+    rosterData.push({
+      artist,
+      bm:      String(r[iBM]      || '').trim().replace('>', '/').replace('  ', ' '),
+      ecomMgr: String(r[iEcomMgr] || '').trim(),
+      ar:      String(r[iAR]      || '').trim(),
+      sales:   String(r[iSales]   || '').trim(),
+      disp:    String(r[iDisp]    || '').trim().toUpperCase(),
+      owned:   String(r[iOwned]   || '').trim().toUpperCase(),
+      vend:    String(r[iVend]    || '').trim().toUpperCase(),
+      tour:    String(r[iTour]    || '').trim().toUpperCase(),
+    });
+  }
+
+  // Populate brand manager filter
+  const bmSel = document.getElementById('f-bm');
+  bmSel.innerHTML = '<option value="">All brand managers</option>';
+  const bmSet = new Set();
+  rosterData.forEach(r => {
+    if (r.bm) r.bm.split('/').forEach(b => bmSet.add(b.trim()));
+  });
+  [...bmSet].sort().forEach(b => {
+    const o = document.createElement('option');
+    o.value = b; o.textContent = b;
+    bmSel.appendChild(o);
+  });
+
+  updateStats();
+  filterRoster();
+}
+
+// ──────────────────────────────────────────────────────
+//  Stats
+// ──────────────────────────────────────────────────────
+function updateStats() {
+  const total  = rosterData.length;
+  const active = rosterData.filter(r => r.disp === 'ACTIVE').length;
+  const owned  = rosterData.filter(r => r.owned === 'YES').length;
+  const vend   = rosterData.filter(r => r.vend  === 'YES').length;
+  document.getElementById('stat-row').innerHTML = [
+    [total,  'Total artists'],
+    [active, 'Active ecom'],
+    [owned,  'Owned / licensed'],
+    [vend,   'Vending clients'],
+  ].map(([n, l]) => `<div class="stat-card"><div class="stat-n">${n}</div><div class="stat-l">${l}</div></div>`).join('');
+}
+
+// ──────────────────────────────────────────────────────
+//  Filter + render
+// ──────────────────────────────────────────────────────
+function filterRoster() {
+  const q    = document.getElementById('search-input').value.toLowerCase();
+  const bm   = document.getElementById('f-bm').value;
+  const disp = document.getElementById('f-disp').value;
+  const own  = document.getElementById('f-own').value;
+  const vend = document.getElementById('f-vend').value;
+
+  const rows = rosterData.filter(r => {
+    if (q && !r.artist.toLowerCase().includes(q) && !r.bm.toLowerCase().includes(q)) return false;
+    if (bm && !r.bm.includes(bm)) return false;
+    if (disp === 'blank' && r.disp !== '') return false;
+    if (disp && disp !== 'blank' && r.disp !== disp) return false;
+    if (own  && r.owned !== own)  return false;
+    if (vend && r.vend  !== vend) return false;
+    return true;
+  });
+
+  document.getElementById('roster-tbody').innerHTML = rows.map(r => `
+    <tr>
+      <td title="${esc(r.artist)}">${esc(r.artist)}</td>
+      <td title="${esc(r.bm)}">${esc(r.bm) || '—'}</td>
+      <td title="${esc(r.ecomMgr)}">${esc(r.ecomMgr) || '—'}</td>
+      <td title="${esc(r.ar)}">${esc(r.ar) || '—'}</td>
+      <td>${esc(r.sales) || '—'}</td>
+      <td>${dispBadge(r.disp)}</td>
+      <td>${yesnoBadge(r.owned)}</td>
+      <td>${yesnoBadge(r.vend)}</td>
+      <td title="${esc(r.tour)}">${esc(r.tour) || '—'}</td>
+    </tr>`).join('');
+
+  document.getElementById('roster-count').textContent =
+    `Showing ${rows.length} of ${rosterData.length} artists`;
+}
+
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function yesnoBadge(v) {
+  if (v === 'YES') return `<span class="badge b-yes">Yes</span>`;
+  if (v === 'NO')  return `<span class="badge b-no">No</span>`;
+  return `<span class="badge b-blank">—</span>`;
+}
+function dispBadge(v) {
+  if (v === 'ACTIVE') return `<span class="badge b-active">Active</span>`;
+  if (v === 'CLOSED') return `<span class="badge b-closed">Closed</span>`;
+  return `<span class="badge b-blank">—</span>`;
+}
+
+// ──────────────────────────────────────────────────────
+//  Error
+// ──────────────────────────────────────────────────────
+function showError(msg) {
+  const el = document.getElementById('error-box');
+  el.innerHTML = `<strong>⚠ Could not load roster data</strong><br>${msg}`;
+  el.style.display = 'block';
+}
+
+// ──────────────────────────────────────────────────────
+//  Init
+// ──────────────────────────────────────────────────────
+window.addEventListener('load', async () => {
+  initMsal();
+  try {
+    await msalInstance.initialize();
+    const accounts = msalInstance.getAllAccounts();
+    if (accounts.length > 0) {
+      onSignedIn(accounts[0]);
+    }
+  } catch(e) {
+    // not signed in — gate stays visible
+  }
+});
+</script>
+</body>
+</html>
